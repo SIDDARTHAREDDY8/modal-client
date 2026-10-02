@@ -1,10 +1,12 @@
 # Copyright Modal Labs 2022
+import asyncio
 import hashlib
 import os
 import platform
 import pytest
 import random
 import re
+import threading
 from math import ceil
 from pathlib import Path, PurePosixPath
 
@@ -260,3 +262,46 @@ def test_mount_from_local_dir_ignore(test_dir, client, tmp_path_with_content):
 def test_client_mount_name():
     # This is expected to raise if we cannot parse the version correctly
     assert client_mount_name().startswith("modal-client-mount")
+
+
+@pytest.mark.asyncio
+async def test_concurrent_mount_loads_do_not_scale_threads_with_mount_count(servicer, client, tmp_path, monkeypatch):
+    # Regression test for https://github.com/modal-labs/modal-client/issues/4142:
+    # concurrently loading many distinct mounts must share one bounded checksum thread pool
+    # instead of creating one thread pool per mount.
+    num_mounts = 40
+    files_per_mount = 20
+
+    mounts = []
+    for i in range(num_mounts):
+        mount_dir = tmp_path / f"mount-{i}"
+        mount_dir.mkdir()
+        for j in range(files_per_mount):
+            (mount_dir / f"file-{j}.txt").write_text(f"content-{i}-{j}")
+        mounts.append(Mount._from_local_dir(mount_dir, remote_path=f"/mount-{i}"))
+
+    original_thread_start = threading.Thread.start
+    baseline_thread_count = threading.active_count()
+    peak_extra_threads = 0
+
+    def counting_start(self, *args, **kwargs):
+        nonlocal peak_extra_threads
+        original_thread_start(self, *args, **kwargs)
+        peak_extra_threads = max(peak_extra_threads, threading.active_count() - baseline_thread_count)
+
+    monkeypatch.setattr(threading.Thread, "start", counting_start)
+
+    async def drain(mount):
+        async for _ in Mount._batched_get_missing_files.aio(
+            mount.entries, client, n_concurrent_checksums=8, batch_size=512
+        ):
+            pass
+
+    await asyncio.gather(*(drain(mount) for mount in mounts))
+
+    # The shared checksum pool uses the default max_workers (min(32, cpu_count + 4)).
+    # Allow up to two pools' worth of threads for interpreter background threads.
+    bound = 2 * min(32, (os.cpu_count() or 1) + 4)
+    assert peak_extra_threads <= bound, (
+        f"loading {num_mounts} mounts concurrently started {peak_extra_threads} threads, expected at most {bound}"
+    )

@@ -6,6 +6,8 @@ Draft releases notes should be added as part of the PR introducing the change. D
 
 ## Python
 
+- Fixed deploying an App with many distinct mounts failing with `RuntimeError: can't start new thread`. Mounts being loaded concurrently now share a single bounded checksum thread pool instead of creating one thread pool per mount.
+
 - Added `modal endpoint info` command for displaying information such as an endpoint's deployment status, URL, and model id. We've also added `modal endpoint stats` to inspect performance metrics for an Endpoint over a selected time window and `modal endpoint logs` for displaying logs for an Endpoint.
 
 ## JS

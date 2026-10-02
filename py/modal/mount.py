@@ -2,9 +2,11 @@
 import abc
 import asyncio
 import concurrent.futures
+import contextlib
 import dataclasses
 import os
 import re
+import threading
 import time
 import typing
 import warnings
@@ -293,6 +295,45 @@ class NonLocalMountError(Exception):
     pass
 
 
+class _SharedChecksumExecutor:
+    """A process-wide, reference-counted ThreadPoolExecutor for file checksums.
+
+    `_Mount._batched_get_missing_files()` is called once per distinct mount, and mounts are
+    loaded concurrently. Creating one default-sized thread pool per mount makes the total
+    thread count grow linearly with the number of mounts, which can fail a deploy with
+    `RuntimeError: can't start new thread`. Sharing a single pool across all concurrently
+    loading mounts keeps the thread count bounded. The pool is created on first use and shut
+    down once the last concurrent mount is done, so no threads outlive the upload.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._executor: concurrent.futures.ThreadPoolExecutor | None = None
+        self._users = 0
+
+    @contextlib.contextmanager
+    def use(self) -> Generator[concurrent.futures.ThreadPoolExecutor, None, None]:
+        with self._lock:
+            if self._executor is None:
+                self._executor = concurrent.futures.ThreadPoolExecutor()
+            executor = self._executor
+            self._users += 1
+        try:
+            yield executor
+        finally:
+            with self._lock:
+                self._users -= 1
+                last_user = self._users == 0
+                if last_user:
+                    self._executor = None
+            if last_user:
+                # Shut down outside the lock so other mounts are not blocked joining threads.
+                executor.shutdown()
+
+
+_checksum_executor = _SharedChecksumExecutor()
+
+
 class _Mount(_Object, type_prefix="mo"):
     """
     **Deprecated**: Mounts should not be used explicitly anymore, use `Image.add_local_*` commands instead.
@@ -480,7 +521,7 @@ class _Mount(_Object, type_prefix="mo"):
         batch_size: int,
     ) -> AsyncGenerator[FileUploadSpec, None]:
         loop = asyncio.get_event_loop()
-        with concurrent.futures.ThreadPoolExecutor() as e:
+        with _checksum_executor.use() as e:
             all_files = await loop.run_in_executor(e, _select_files, entries)
             logger.debug(f"Computing checksums for {len(all_files)} files using default max workers")
 
