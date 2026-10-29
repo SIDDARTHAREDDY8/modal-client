@@ -58,6 +58,22 @@ from modal._utils.docker_utils import extract_copy_command_patterns, find_docker
             ["COPY --link files/app.py /dest/"],
             {"files/app.py"},
         ),
+        (
+            ['COPY ["files/dir1", "/dest/"]'],
+            {"files/dir1"},
+        ),
+        (
+            ['COPY ["files/my dir/a.txt", "/dest/"]'],
+            {"files/my dir/a.txt"},
+        ),
+        (
+            ['COPY --chown=1000:1000 ["files/a.txt", "files/b.txt", "/dest/"]'],
+            {"files/a.txt", "files/b.txt"},
+        ),
+        (
+            ["COPY ./ /dest/"],
+            {"./**"},
+        ),
     ],
 )
 def test_extract_copy_command_patterns(copy_commands, expected_patterns):

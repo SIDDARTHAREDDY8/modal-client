@@ -1,4 +1,6 @@
 # Copyright Modal Labs 2024
+import json
+import os
 import re
 import shlex
 from collections.abc import Sequence
@@ -36,7 +38,18 @@ def extract_copy_command_patterns(dockerfile_lines: Sequence[str]) -> list[str]:
             match = copy_pattern.match(current_command)
             if match:
                 args = match.group(1)
-                parts = shlex.split(args)
+                # Docker also accepts the JSON (exec) form after any flags:
+                # COPY [--flag...] ["<src>",... "<dest>"]
+                # https://docs.docker.com/reference/dockerfile/#copy
+                flags, rest = re.match(r"^((?:--\S+\s+)*)(.*)$", args).groups()
+                try:
+                    json_parts = json.loads(rest) if rest.startswith("[") else None
+                except ValueError:
+                    json_parts = None
+                if isinstance(json_parts, list) and all(isinstance(p, str) for p in json_parts):
+                    parts = shlex.split(flags) + json_parts
+                else:
+                    parts = shlex.split(args)
 
                 # COPY --from=... commands reference external sources and do not need a context mount.
                 # https://docs.docker.com/reference/dockerfile/#copy---from
@@ -64,7 +77,7 @@ def extract_copy_command_patterns(dockerfile_lines: Sequence[str]) -> list[str]:
                                 f"COPY command: {source} using special flags/arguments/variables are not supported"
                             )
 
-                        if source == ".":
+                        if os.path.normpath(source) == ".":
                             copy_source_patterns.add("./**")
                         else:
                             copy_source_patterns.add(source)
