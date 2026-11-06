@@ -10,6 +10,7 @@ Draft releases notes should be added as part of the PR introducing the change. D
 - Fixed `modal shell --cmd` mangling quotes in the command when starting a new container; the command is now passed verbatim to `/bin/bash -c`.
 - Added `modal image build -t NAME CONTEXT_DIR` to build and publish an Image from a Dockerfile. Use `--registry-secret` or `--registry-secret-from-env` to pull a base image from a private registry. Prefix NAME with an environment, e.g. `-t my-env/my-image`, to publish it into that environment.
 - Added a `modal image pull` CLI command that pulls an Image from a container registry into Modal, e.g. `modal image pull docker.io/node:20 --name node`.
+- Fixed `Image.from_dockerfile` and `Image.dockerfile_commands` failing on `COPY` instructions in JSON form (e.g. `COPY ["src", "/app/"]`, which is required for paths containing whitespace) and on `COPY ./ /app/`, which selected no files; both now include the intended build-context files.
 - Added `modal endpoint library` to discover endpoint-compatible models.
 - Fixed `Image.cmd()`, `Image.entrypoint()`, and `Image.shell()` for arguments that contain double quotes or backslashes. Such arguments are now passed to the container exactly as written; previously a command like `Image.cmd(["sh", "-c", 'echo "hi"'])` failed when the container started.
 - Functions restored from a memory snapshot now see current secret values in os.environ, instead of the secrets from when the snapshot was taken.
